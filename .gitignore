@@ -1,0 +1,9 @@
+/server/venv
+# Ignore the virtual environment directory
+/venv
+/server/serviceAccountKey.json
+/server/config.py
+# server/serviceAccountKey.json --- IGNORE ---
+# server/venv --- IGNORE ---
+# This line is to ensure that the virtual environment directory is not tracked by Git
+# and is excluded from version control.
