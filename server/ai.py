@@ -1,4 +1,4 @@
-import google.generativeai as genai # type: ignore
+import google.generativeai as genai 
 from dotenv import load_dotenv
 import os
 

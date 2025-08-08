@@ -15,6 +15,8 @@ import os
 from typing import List, AsyncIterator
 from datetime import datetime
 import logging
+from redis import asyncio as aioredis
+
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +25,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Startup
     logger.info("Initializing application...")
     try:
-        await FastAPILimiter.init(settings.REDIS_URL)
+        redis = await aioredis.from_url(
+            settings.REDIS_URL,
+            encoding="utf-8",
+            decode_responses=True
+        )
+        await FastAPILimiter.init(redis)
         logger.info("Rate limiter initialized")
         
         # Verify essential services
@@ -73,6 +80,136 @@ engine = create_engine(
 )
 
 # API Routes
+@app.get(
+    "/careers/categories",
+    response_model=List[CareerCategory],
+    summary="Get all career categories",
+    dependencies=[Depends(RateLimiter(times=10, seconds=60))]
+)
+async def get_career_categories():
+    try:
+        with Session(engine) as session:
+            categories = session.exec(select(CareerCategory)).all()
+            logger.info(f"Retrieved {len(categories)} career categories")
+            return categories
+    except Exception as e:
+        logger.error(f"Error fetching career categories: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve career categories"
+        )
+    
+# Career Category Routes
+@app.post(
+    "/careers/categories",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(RateLimiter(times=2, seconds=60))],
+    summary="Create new career category",
+    response_description="The created career category"
+)
+async def create_career_category(
+    name: str,
+    user: dict = Depends(get_current_user)
+):
+    try:
+        with Session(engine) as session:
+            # Check if category already exists
+            existing = session.exec(select(CareerCategory).where(CareerCategory.name == name)).first()
+            if existing:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Category with this name already exists"
+                )
+                
+            category = CareerCategory(name=name)
+            session.add(category)
+            session.commit()
+            session.refresh(category)
+            
+            logger.info(f"New career category created: {category.id} - {category.name}")
+            
+            return {
+                "message": "Career category created successfully",
+                "data": {
+                    "id": category.id,
+                    "name": category.name
+                }
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating career category: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create career category"
+        )
+    
+    
+@app.get(
+    "/careers",
+    response_model=List[CareerPost],
+    summary="Get all career posts",
+    dependencies=[Depends(RateLimiter(times=10, seconds=60))]
+)
+async def get_career_posts(
+    category_id: Optional[int] = None,
+    limit: int = 10,
+    offset: int = 0
+):
+    try:
+        with Session(engine) as session:
+            query = select(CareerPost).order_by(CareerPost.posted_at.desc())
+            
+            if category_id:
+                query = query.where(CareerPost.category_id == category_id)
+                
+            query = query.limit(limit).offset(offset)
+            
+            careers = session.exec(query).all()
+            logger.info(f"Retrieved {len(careers)} career posts")
+            return careers
+    except Exception as e:
+        logger.error(f"Error fetching career posts: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve career posts"
+        )
+    
+@app.get(
+    "/careers/{career_id}",
+    response_model=CareerPost,
+    summary="Get career post by ID",
+    dependencies=[Depends(RateLimiter(times=10, seconds=60))]
+)
+async def get_career_post(
+    career_id: int,
+    user: dict = Depends(get_current_user)
+):
+    try:
+        with Session(engine) as session:
+            career = session.exec(
+                select(CareerPost).where(CareerPost.id == career_id)
+            ).first()
+            
+            if not career:
+                logger.warning(f"Career post not found: {career_id}")
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Career post not found"
+                )
+                
+            logger.info(f"Retrieved career post: {career_id}")
+            return career
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching career post: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve career post"
+        )
+    
+
 @app.post(
     "/careers",
     status_code=status.HTTP_201_CREATED,
@@ -113,6 +250,64 @@ async def create_career_post(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create career post"
+        )
+    
+@app.put(
+    "/careers/{career_id}",
+    response_model=CareerPost,
+    summary="Update career post",
+    dependencies=[Depends(RateLimiter(times=2, seconds=60))]
+)
+async def update_career_post(
+    career_id: int,
+    title: Optional[str] = None,
+    description: Optional[str] = None,
+    requirements: Optional[str] = None,
+    location: Optional[str] = None,
+    content: Optional[str] = None,
+    category_id: Optional[int] = None,
+    user: dict = Depends(get_current_user)
+):
+    try:
+        with Session(engine) as session:
+            career = session.exec(
+                select(CareerPost).where(CareerPost.id == career_id)
+            ).first()
+            
+            if not career:
+                logger.warning(f"Career post not found: {career_id}")
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Career post not found"
+                )
+                
+            # Update fields if provided
+            if title is not None:
+                career.title = title
+            if description is not None:
+                career.description = description
+            if requirements is not None:
+                career.requirements = requirements
+            if location is not None:
+                career.location = location
+            if content is not None:
+                career.content = content
+            if category_id is not None:
+                career.category_id = category_id
+                
+            session.add(career)
+            session.commit()
+            session.refresh(career)
+            
+            logger.info(f"Updated career post: {career_id}")
+            return career
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating career post: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update career post"
         )
 
 @app.post(

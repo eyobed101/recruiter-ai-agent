@@ -2,7 +2,9 @@
 # Ignore the virtual environment directory
 /venv
 /server/serviceAccountKey.json
-/server/config.py
+# /server/config.py
+/server/.env
+
 # server/serviceAccountKey.json --- IGNORE ---
 # server/venv --- IGNORE ---
 # This line is to ensure that the virtual environment directory is not tracked by Git
