@@ -1,3 +1,4 @@
+from sqlalchemy import UniqueConstraint
 from sqlmodel import SQLModel, Field, Relationship
 from typing import Optional, List
 from datetime import datetime
@@ -52,6 +53,11 @@ class Application(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
     career_id: int = Field(foreign_key="careerpost.id")
-    user_id: Optional[str] = Field(default=None)
+    user_id: str = Field(nullable=False)  # Changed from Optional to required
 
     career: CareerPost = Relationship(back_populates="applications")
+
+    # Add composite unique constraint
+    __table_args__ = (
+        UniqueConstraint('user_id', 'career_id', name='uix_user_career'),
+    )

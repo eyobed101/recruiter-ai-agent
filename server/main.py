@@ -7,7 +7,7 @@ from fastapi.security import HTTPBearer
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
 from auth import get_current_user
-from models import *
+from models.model import *
 from ai import analyze_resume
 from tasks import send_status_email
 from sqlmodel import Session, create_engine, select
@@ -41,7 +41,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Startup
     logger.info("Initializing application...")
     try:
-        from models import SQLModel
+        from models.model import SQLModel
         SQLModel.metadata.create_all(engine)
         logger.info("Database tables created")
 
@@ -347,6 +347,21 @@ async def apply_for_job(
     user: dict = Depends(get_current_user)
 ) -> JSONResponse:
     try:
+        # First check for existing application
+        with Session(engine) as session:
+            existing_application = session.exec(
+                select(Application)
+                .where(Application.career_id == career_id)
+                .where(Application.user_id == user['uid'])
+            ).first()
+            
+            if existing_application:
+                logger.warning(f"User {user['uid']} already applied to career {career_id}")
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="You have already applied for this position"
+                )
+
         # Validate file types
         allowed_extensions = ['.pdf', '.docx', '.doc']
         cv_filename = cv.filename.lower()
@@ -362,7 +377,7 @@ async def apply_for_job(
                 detail=f"Additional document must be one of {', '.join(allowed_extensions)}"
             )
 
-        # Save uploaded files (await the coroutines)
+        # Save uploaded files
         cv_path = await save_uploaded_file(cv)
         document_path = await save_uploaded_file(document) if document else None
         logger.info(f"Saved files - CV: {cv_path}, Document: {document_path or 'None'}")
@@ -372,16 +387,16 @@ async def apply_for_job(
             job = session.exec(select(CareerPost).where(CareerPost.id == career_id)).first()
             if not job:
                 logger.warning(f"Career post not found: {career_id}")
+                if os.path.exists(cv_path):
+                    os.remove(cv_path)
+                if document_path and os.path.exists(document_path):
+                    os.remove(document_path)
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Job posting not found"
                 )
 
-            # Extract text from resume (await the coroutine)
-            resume_text = await extract_text_from_file(cv_path)
-            logger.debug(f"Extracted resume text (length: {len(resume_text)})")
-            
-            # Create application record
+            # Create and commit application record first
             application = Application(
                 full_name=full_name,
                 phone_number=phone_number,
@@ -398,16 +413,8 @@ async def apply_for_job(
             session.refresh(application)
             logger.info(f"New application created: {application.id}")
 
-            # AI Screening in background
-            background_tasks.add_task(
-                process_application_screening,
-                application.id,
-                job.description,
-                resume_text,
-                job.title
-            )
-
-            return JSONResponse(
+            # Prepare success response
+            response = JSONResponse(
                 status_code=status.HTTP_201_CREATED,
                 content={
                     "message": "Application submitted successfully",
@@ -419,12 +426,31 @@ async def apply_for_job(
                     "Access-Control-Allow-Credentials": "true"
                 }
             )
+
+            # Now kick off background tasks after response is ready
+            try:
+                # Extract text from resume in background
+                resume_text = await extract_text_from_file(cv_path)
+                logger.debug(f"Extracted resume text (length: {len(resume_text)})")
+                
+                # Add background screening task
+                background_tasks.add_task(
+                    process_application_screening,
+                    application.id,
+                    job.description,
+                    resume_text,
+                    job.title
+                )
+            except Exception as bg_error:
+                logger.error(f"Background task setup failed: {str(bg_error)}")
+                # This won't affect the response since it happens after
+
+            return response
             
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error processing application: {str(e)}", exc_info=True)
-        # Clean up saved files if error occurred
         if 'cv_path' in locals() and cv_path and os.path.exists(cv_path):
             os.remove(cv_path)
         if 'document_path' in locals() and document_path and os.path.exists(document_path):
@@ -481,6 +507,10 @@ async def process_application_screening(
             ai_analysis_str = analyze_resume(job_desc, resume_text)
             logger.debug(f"AI analysis result: {ai_analysis_str}")
             
+            # Clean the JSON string by removing Markdown code block markers
+            if ai_analysis_str.startswith("```json") and ai_analysis_str.endswith("```"):
+                ai_analysis_str = ai_analysis_str[7:-3].strip()  # Remove ```json and ```
+            
             # Parse the JSON string to a dictionary
             import json
             ai_analysis = json.loads(ai_analysis_str)
@@ -506,5 +536,8 @@ async def process_application_screening(
                 )
                 logger.info(f"Status email queued for {application.email}")
             
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse AI analysis JSON: {str(e)}")
+            logger.error(f"Raw analysis content: {ai_analysis_str}")
         except Exception as e:
             logger.error(f"Error in background screening: {str(e)}")

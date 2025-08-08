@@ -244,7 +244,11 @@ export default function CareerPage() {
       return;
     }
 
-    if (existingApplications[career.id]) {
+    const hasApplied =
+      existingApplications[career.id] ||
+      userApplications.some((app) => app.career_id === career.id);
+
+    if (hasApplied) {
       toast.error("You've already applied for this position");
       return;
     }
@@ -265,7 +269,7 @@ export default function CareerPage() {
 
     try {
       // Pass plain data, let createApplication build FormData
-      const { data } = await createApplication(
+      const data  = await createApplication(
         {
           careerId: selectedCareer.id,
           fullName: values.fullName,
@@ -377,18 +381,16 @@ export default function CareerPage() {
                           <Badge variant="outline" className="text-xs">
                             Applied on{" "}
                             {new Date(
-                              application.createdAt
+                              application.created_at
                             ).toLocaleDateString()}
                           </Badge>
                         </div>
                         <div className="flex flex-wrap gap-2 mt-2">
                           <Badge variant="outline" className="text-xs gap-1.5">
                             <MapPin size={14} />
-                            {application.location}
+                            {careerPosts.filter((career) => career.id === application.career_id)[0].location}
                           </Badge>
-                          <Badge variant="outline" className="text-xs">
-                            {application.name}
-                          </Badge>
+
                         </div>
                       </CardHeader>
                       <CardFooter className="flex justify-between items-center pt-0">
@@ -526,7 +528,7 @@ export default function CareerPage() {
                         className="text-xs text-muted-foreground gap-1.5"
                       >
                         <Clock4 size={14} />
-                        {new Date(career.createdAt).toLocaleDateString(
+                        {new Date(career.posted_at).toLocaleDateString(
                           "en-US",
                           {
                             year: "numeric",
@@ -557,8 +559,17 @@ export default function CareerPage() {
                         size="sm"
                         onClick={() => handleApplyClick(career)}
                         className="w-full sm:w-auto gap-1"
+                        disabled={
+                          existingApplications[career.id] ||
+                          userApplications.some(
+                            (app) => app.career_id === career.id
+                          )
+                        }
                       >
-                        {existingApplications[career.id] ? (
+                        {existingApplications[career.id] ||
+                        userApplications.some(
+                          (app) => app.career_id === career.id
+                        ) ? (
                           <>
                             <CheckCircle className="h-4 w-4" />
                             Applied
@@ -685,7 +696,10 @@ export default function CareerPage() {
                       {selectedCareer.category.name}
                     </Badge>
                   )}
-                  {existingApplications[selectedCareer.id] && (
+                  {(existingApplications[selectedCareer.id] ||
+                    userApplications.some(
+                      (app) => app.career_id === selectedCareer.id
+                    )) && (
                     <Badge
                       variant="outline"
                       className="text-xs bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-300"
@@ -697,7 +711,7 @@ export default function CareerPage() {
                 </div>
                 <div className="prose prose-sm dark:prose-invert text-foreground max-w-none">
                   <p className="whitespace-pre-line">
-                    {selectedCareer.content}
+                    {selectedCareer.description}
                   </p>
                 </div>
               </div>
@@ -712,10 +726,17 @@ export default function CareerPage() {
                 }}
                 className="gap-1"
                 disabled={
-                  existingApplications[selectedCareer?.id || 0] || !user
+                  existingApplications[selectedCareer?.id || 0] ||
+                  userApplications.some(
+                    (app) => app.career_id === selectedCareer?.id
+                  ) ||
+                  !user
                 }
               >
-                {existingApplications[selectedCareer?.id || 0] ? (
+                {existingApplications[selectedCareer?.id || 0] ||
+                userApplications.some(
+                  (app) => app.career_id === selectedCareer?.id
+                ) ? (
                   <>
                     <CheckCircle className="h-4 w-4" />
                     Already Applied

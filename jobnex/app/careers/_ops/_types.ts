@@ -1,6 +1,8 @@
 import { ReactNode } from "react";
 
 export interface CareerPost {
+  posted_at: string | number | Date;
+  description: ReactNode;
   category_id: number;
   id: number;
   title: string;
@@ -16,6 +18,8 @@ export interface CareerCategory {
 }
 
 export interface Application {
+  created_at: string | number | Date;
+  updated_at: string | number | Date;
   career_id: number;
   name: ReactNode;
   location: ReactNode;
