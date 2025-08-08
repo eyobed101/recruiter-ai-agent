@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, UploadFile, Depends, HTTPException, status, BackgroundTasks
+from typing import Annotated, Optional
+from fastapi import FastAPI, UploadFile, Depends, HTTPException, status, BackgroundTasks, Form, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
@@ -16,15 +18,33 @@ from typing import List, AsyncIterator
 from datetime import datetime
 import logging
 from redis import asyncio as aioredis
+from pydantic import BaseModel
+
+
+class CareerPostCreate(BaseModel):
+    title: str
+    description: str
+    requirements: str
+    location: str
+    category_id: int
+    content: str = ""
+
 
 
 logger = logging.getLogger(__name__)
+
+
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Startup
     logger.info("Initializing application...")
     try:
+        from models import SQLModel
+        SQLModel.metadata.create_all(engine)
+        logger.info("Database tables created")
+
         redis = await aioredis.from_url(
             settings.REDIS_URL,
             encoding="utf-8",
@@ -64,10 +84,10 @@ app = FastAPI(
 # CORS Configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS.split(","),
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    allow_credentials=True,
 )
 
 # Database Setup
@@ -109,11 +129,12 @@ async def get_career_categories():
 )
 async def create_career_category(
     name: str,
-    user: dict = Depends(get_current_user)
+    # user: dict = Depends(get_current_user)
 ):
     try:
         with Session(engine) as session:
             # Check if category already exists
+            print(f"Creating category with name: {name}")
             existing = session.exec(select(CareerCategory).where(CareerCategory.name == name)).first()
             if existing:
                 raise HTTPException(
@@ -218,17 +239,17 @@ async def get_career_post(
     response_description="The created career post"
 )
 async def create_career_post(
-    title: str,
-    description: str,
-    requirements: str,
-    user: dict = Depends(get_current_user)
+    career_data: CareerPostCreate  
+    # user: dict = Depends(get_current_user)
 ):
     try:
         with Session(engine) as session:
             career = CareerPost(
-                title=title,
-                description=description,
-                requirements=requirements,
+                title=career_data.title,
+                description=career_data.description,
+                requirements=career_data.requirements,
+                location=career_data.location,
+                category_id=career_data.category_id if hasattr(career_data, 'category_id') else None,
                 posted_at=datetime.utcnow()
             )
             session.add(career)
@@ -242,7 +263,11 @@ async def create_career_post(
                 "data": {
                     "id": career.id,
                     "title": career.title,
-                    "posted_at": career.posted_at.isoformat()
+                    "posted_at": career.posted_at.isoformat(),
+                    "location": career.location,
+                    "description": career.description,
+                    "requirements": career.requirements,
+                    "category_id": career.category_id,
                 }
             }
     except Exception as e:
@@ -310,34 +335,38 @@ async def update_career_post(
             detail="Failed to update career post"
         )
 
-@app.post(
-    "/apply",
-    status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(RateLimiter(times=3, seconds=60))],
-    summary="Submit job application",
-    response_description="Application submission result"
-)
+@app.post("/apply")
 async def apply_for_job(
-    career_id: int,
-    full_name: str,
-    phone_number: str,
-    email: str,
-    cv: UploadFile,
     background_tasks: BackgroundTasks,
-    user: dict = Depends(get_current_user)  
-):
+    career_id: Annotated[int, Form()],
+    full_name: Annotated[str, Form()],
+    phone_number: Annotated[str, Form()],
+    email: Annotated[str, Form()],
+    cv: Annotated[UploadFile, File(description="Resume/CV file (PDF/DOCX)")],
+    document: Annotated[Optional[UploadFile], File(description="Optional additional document")] = None,
+    user: dict = Depends(get_current_user)
+) -> JSONResponse:
     try:
-        # Validate file type
-        if not cv.filename.lower().endswith(tuple(f'.{ext}' for ext in settings.ALLOWED_FILE_TYPES)):
+        # Validate file types
+        allowed_extensions = ['.pdf', '.docx', '.doc']
+        cv_filename = cv.filename.lower()
+        if not any(cv_filename.endswith(ext) for ext in allowed_extensions):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Only {', '.join(settings.ALLOWED_FILE_TYPES)} files are allowed"
+                detail=f"CV must be one of {', '.join(allowed_extensions)}"
             )
 
-        # Save uploaded file
-        cv_path = save_uploaded_file(cv)
-        logger.info(f"Saved CV to: {cv_path}")
-        
+        if document and not any(document.filename.lower().endswith(ext) for ext in allowed_extensions):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Additional document must be one of {', '.join(allowed_extensions)}"
+            )
+
+        # Save uploaded files (await the coroutines)
+        cv_path = await save_uploaded_file(cv)
+        document_path = await save_uploaded_file(document) if document else None
+        logger.info(f"Saved files - CV: {cv_path}, Document: {document_path or 'None'}")
+
         with Session(engine) as session:
             # Verify career exists
             job = session.exec(select(CareerPost).where(CareerPost.id == career_id)).first()
@@ -348,8 +377,8 @@ async def apply_for_job(
                     detail="Job posting not found"
                 )
 
-            # Extract text from resume
-            resume_text = extract_text_from_file(cv_path)
+            # Extract text from resume (await the coroutine)
+            resume_text = await extract_text_from_file(cv_path)
             logger.debug(f"Extracted resume text (length: {len(resume_text)})")
             
             # Create application record
@@ -358,10 +387,12 @@ async def apply_for_job(
                 phone_number=phone_number,
                 email=email,
                 cv_path=cv_path,
+                document_path=document_path,
                 career_id=career_id,
                 user_id=user['uid'],
                 status=ApplicationStatus.pending
             )
+            
             session.add(application)
             session.commit()
             session.refresh(application)
@@ -376,15 +407,29 @@ async def apply_for_job(
                 job.title
             )
 
-            return {
-                "message": "Application submitted for screening",
-                "application_id": application.id
-            }
+            return JSONResponse(
+                status_code=status.HTTP_201_CREATED,
+                content={
+                    "message": "Application submitted successfully",
+                    "application_id": application.id,
+                    "status": "pending"
+                },
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
             
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error processing application: {str(e)}")
+        logger.error(f"Error processing application: {str(e)}", exc_info=True)
+        # Clean up saved files if error occurred
+        if 'cv_path' in locals() and cv_path and os.path.exists(cv_path):
+            os.remove(cv_path)
+        if 'document_path' in locals() and document_path and os.path.exists(document_path):
+            os.remove(document_path)
+            
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to process application"
@@ -433,8 +478,12 @@ async def process_application_screening(
             logger.info(f"Processing screening for application {application_id}")
             
             # AI Analysis
-            ai_analysis = analyze_resume(job_desc, resume_text)
-            logger.debug(f"AI analysis result: {ai_analysis}")
+            ai_analysis_str = analyze_resume(job_desc, resume_text)
+            logger.debug(f"AI analysis result: {ai_analysis_str}")
+            
+            # Parse the JSON string to a dictionary
+            import json
+            ai_analysis = json.loads(ai_analysis_str)
             
             # Update application based on score
             if ai_analysis.get("match_score", 0) < 50:

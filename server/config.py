@@ -16,8 +16,17 @@ class Settings(BaseSettings):
 
     # Database
 
-    DATABASE_URL: str = "sqlite:///./careers.db"  
-    DB_POOL_SIZE: int = 5
+
+
+    POSTGRES_USER: str
+    POSTGRES_PASSWORD: str
+    POSTGRES_HOST: str 
+    POSTGRES_PORT: str 
+    POSTGRES_DB: str 
+
+    @property
+    def DATABASE_URL(self):
+        return f"postgresql+psycopg2://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
 
 
     FIREBASE_KEY_PATH: str = "./serviceAccountKey.json"

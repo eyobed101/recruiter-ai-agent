@@ -7,7 +7,7 @@ load_dotenv()
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 def analyze_resume(job_desc: str, resume_text: str) -> dict:
-    model = genai.GenerativeModel('gemini-pro')
+    model = genai.GenerativeModel('gemini-2.0-flash')
     prompt = f"""
     Analyze this resume for a {job_desc} role:
     {resume_text}

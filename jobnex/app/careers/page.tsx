@@ -51,6 +51,7 @@ import {
 import { Application, CareerPost } from "./_ops/_types";
 import { useAuth } from "@/context/auth-context";
 import { redirect } from "next/navigation";
+import { useRouter } from "next/router";
 
 const formSchema = z.object({
   fullName: z.string().min(2, "Full name must be at least 2 characters"),
@@ -82,7 +83,9 @@ const formSchema = z.object({
 
 export default function CareerPage() {
   const [careerPosts, setCareerPosts] = useState<CareerPost[]>([]);
-  const [categories, setCategories] = useState<{ id: number; name: string }[]>([]);
+  const [categories, setCategories] = useState<{ id: number; name: string }[]>(
+    []
+  );
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<number | null>(null);
   const [filteredCareers, setFilteredCareers] = useState<CareerPost[]>([]);
@@ -94,10 +97,12 @@ export default function CareerPage() {
   const [limit, setLimit] = useState(10);
   const [totalPages, setTotalPages] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
-  const [existingApplications, setExistingApplications] = useState<Record<number, boolean>>({});
+  const [existingApplications, setExistingApplications] = useState<
+    Record<number, boolean>
+  >({});
   const [userApplications, setUserApplications] = useState<Application[]>([]);
   const [showApplications, setShowApplications] = useState(false);
-  
+
   const { user, loading: authLoading, signIn } = useAuth();
 
   const form = useForm<z.infer<typeof formSchema>>({
@@ -120,15 +125,35 @@ export default function CareerPage() {
 
   useEffect(() => {
     const loadUserApplications = async () => {
-      if (user) {
+      if (user?.uid) {
+        // Add null check for uid
         try {
-          const { data } = await getUserApplications(user.uid, user);
+          const data = await getUserApplications(user.uid, user);
+
+          console.log("User applications response:", data);
+
           if (data) {
-            setUserApplications(data);
-            const applicationsMap = data.reduce(
-              (acc: any, app: { careerId: any; }) => ({ ...acc, [app.careerId]: true }),
+            // Safely transform the data to break circular references
+            const sanitizedData = data.map(
+              (app: { careerId: any; status: any }) => ({
+                ...app,
+                // Explicitly select only needed properties
+                careerId: app.careerId,
+                status: app.status,
+                // Add other needed fields
+              })
+            );
+
+            setUserApplications(sanitizedData);
+
+            const applicationsMap = sanitizedData.reduce(
+              (acc: any, app: { careerId: any }) => ({
+                ...acc,
+                [app.careerId]: true,
+              }),
               {} as Record<number, boolean>
             );
+
             setExistingApplications(applicationsMap);
           }
         } catch (error) {
@@ -138,21 +163,25 @@ export default function CareerPage() {
     };
 
     loadUserApplications();
-  }, [user]);
+  }, [user?.uid]); // Only depend on uid
 
   useEffect(() => {
     const loadData = async () => {
       try {
         setIsLoading(true);
         const postsRes = await getCareerPostsWithPagination(page, limit);
+        console.log("Career posts response:", postsRes);
         const categoriesRes = await getCareerCategories();
+        console.log("Career categories response:", categoriesRes);
 
-        if (postsRes.data) {
-          setCareerPosts(postsRes.data.careerPosts);
-          setTotalPages(postsRes.data.totalPages);
-          setTotalCount(postsRes.data.totalCount);
+        if (postsRes) {
+          setCareerPosts(postsRes);
+          setTotalPages(
+            postsRes.length > 0 ? Math.ceil(postsRes.length / limit) : 1
+          );
+          setTotalCount(postsRes.length);
         }
-        if (categoriesRes.data) setCategories(categoriesRes.data);
+        if (categoriesRes) setCategories(categoriesRes);
       } catch (err) {
         console.error("Failed to load jobs:", err);
         toast.error("Failed to load jobs");
@@ -172,7 +201,10 @@ export default function CareerPage() {
 
           if (data) {
             const applicationsMap = data.reduce(
-              (acc: any, app: { careerId: any; }) => ({ ...acc, [app.careerId]: true }),
+              (acc: any, app: { careerId: any }) => ({
+                ...acc,
+                [app.careerId]: true,
+              }),
               {} as Record<number, boolean>
             );
             setExistingApplications(applicationsMap);
@@ -187,7 +219,7 @@ export default function CareerPage() {
   }, [user, careerPosts]);
 
   useEffect(() => {
-    let filtered = careerPosts;
+    let filtered = careerPosts ?? [];
 
     if (searchTerm) {
       filtered = filtered.filter((career) =>
@@ -197,9 +229,9 @@ export default function CareerPage() {
       );
     }
 
-    if (selectedCategory !== null) {
+    if (selectedCategory) {
       filtered = filtered.filter(
-        (career) => career.category?.id === selectedCategory
+        (career) => career.category_id === selectedCategory
       );
     }
 
@@ -226,11 +258,20 @@ export default function CareerPage() {
       return;
     }
 
+    if (!values.cvPath) {
+      toast.error("Please upload your CV");
+      return;
+    }
+
     try {
+      // Pass plain data, let createApplication build FormData
       const { data } = await createApplication(
         {
-          ...values,
           careerId: selectedCareer.id,
+          fullName: values.fullName,
+          phoneNumber: values.phoneNumber,
+          email: values.email,
+          cvPath: values.cvPath, // File object
         },
         user
       );
@@ -327,22 +368,27 @@ export default function CareerPage() {
                       <CardHeader className="pb-3">
                         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                           <CardTitle className="text-lg font-semibold">
-                            {application.career.title}
+                            {
+                              careerPosts.filter(
+                                (career) => career.id === application.career_id
+                              )[0].title
+                            }
                           </CardTitle>
                           <Badge variant="outline" className="text-xs">
-                            Applied on {new Date(application.createdAt).toLocaleDateString()}
+                            Applied on{" "}
+                            {new Date(
+                              application.createdAt
+                            ).toLocaleDateString()}
                           </Badge>
                         </div>
                         <div className="flex flex-wrap gap-2 mt-2">
                           <Badge variant="outline" className="text-xs gap-1.5">
                             <MapPin size={14} />
-                            {application.career.location}
+                            {application.location}
                           </Badge>
-                          {application.career.category?.name && (
-                            <Badge variant="outline" className="text-xs">
-                              {application.career.category.name}
-                            </Badge>
-                          )}
+                          <Badge variant="outline" className="text-xs">
+                            {application.name}
+                          </Badge>
                         </div>
                       </CardHeader>
                       <CardFooter className="flex justify-between items-center pt-0">
@@ -480,11 +526,14 @@ export default function CareerPage() {
                         className="text-xs text-muted-foreground gap-1.5"
                       >
                         <Clock4 size={14} />
-                        {new Date(career.createdAt).toLocaleDateString("en-US", {
-                          year: "numeric",
-                          month: "short",
-                          day: "numeric",
-                        })}
+                        {new Date(career.createdAt).toLocaleDateString(
+                          "en-US",
+                          {
+                            year: "numeric",
+                            month: "short",
+                            day: "numeric",
+                          }
+                        )}
                       </Badge>
                       <Badge
                         variant="outline"
@@ -618,11 +667,14 @@ export default function CareerPage() {
                 <div className="flex flex-wrap gap-2">
                   <Badge variant="outline" className="text-xs gap-1.5">
                     <Clock4 size={14} />
-                    {new Date(selectedCareer.createdAt).toLocaleDateString("en-US", {
-                      year: "numeric",
-                      month: "short",
-                      day: "numeric",
-                    })}
+                    {new Date(selectedCareer.createdAt).toLocaleDateString(
+                      "en-US",
+                      {
+                        year: "numeric",
+                        month: "short",
+                        day: "numeric",
+                      }
+                    )}
                   </Badge>
                   <Badge variant="outline" className="text-xs gap-1.5">
                     <MapPin size={14} />
@@ -644,7 +696,9 @@ export default function CareerPage() {
                   )}
                 </div>
                 <div className="prose prose-sm dark:prose-invert text-foreground max-w-none">
-                  <p className="whitespace-pre-line">{selectedCareer.content}</p>
+                  <p className="whitespace-pre-line">
+                    {selectedCareer.content}
+                  </p>
                 </div>
               </div>
             )}
@@ -657,7 +711,9 @@ export default function CareerPage() {
                   }
                 }}
                 className="gap-1"
-                disabled={existingApplications[selectedCareer?.id || 0] || !user}
+                disabled={
+                  existingApplications[selectedCareer?.id || 0] || !user
+                }
               >
                 {existingApplications[selectedCareer?.id || 0] ? (
                   <>
@@ -687,7 +743,8 @@ export default function CareerPage() {
               <div className="flex items-center gap-3 bg-blue-50 dark:bg-blue-900/30 rounded-lg p-3 mb-4">
                 <User className="h-5 w-5 text-blue-600 dark:text-blue-400" />
                 <p className="text-sm text-blue-700 dark:text-blue-300">
-                  Applying as <span className="font-medium">{user.displayName}</span>
+                  Applying as{" "}
+                  <span className="font-medium">{user.displayName}</span>
                 </p>
               </div>
             )}

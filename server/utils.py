@@ -1,20 +1,21 @@
 import os
 import magic
+import uuid
 from typing import Optional
 from fastapi import UploadFile, HTTPException
 from config import settings
 from pathlib import Path
-import shutil
-import PyPDF2
-from docx import Document
 import logging
 import aiofiles
 import aiofiles.os
+import PyPDF2
+import io
+from docx import Document
 
 logger = logging.getLogger(__name__)
 
 async def save_uploaded_file(file: UploadFile, custom_filename: Optional[str] = None) -> str:
-
+    """Save uploaded file with UUID filename and return its path string"""
     try:
         # Create upload directory if needed
         await aiofiles.os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
@@ -32,9 +33,9 @@ async def save_uploaded_file(file: UploadFile, custom_filename: Optional[str] = 
                 detail=f"Invalid file type. Allowed: {settings.ALLOWED_FILE_TYPES}"
             )
         
-        # Generate secure filename
-        ext = "pdf" if "pdf" in file_type else "docx"
-        filename = f"{custom_filename or Path(file.filename).stem}.{ext}"
+        # Generate UUID filename with original extension
+        ext = Path(file.filename).suffix.lower() or (".pdf" if "pdf" in file_type else ".docx")
+        filename = f"{uuid.uuid4()}{ext}"
         file_path = str(Path(settings.UPLOAD_DIR) / filename)
         
         # Save file async
@@ -62,26 +63,43 @@ async def save_uploaded_file(file: UploadFile, custom_filename: Optional[str] = 
             status_code=500,
             detail="Failed to save uploaded file"
         )
-
+    
 async def extract_text_from_file(file_path: str) -> str:
+    """Extract text from PDF or DOCX files with proper file handling"""
     try:
+        if not await aiofiles.os.path.exists(file_path):
+            raise ValueError("File does not exist")
+        
         if file_path.endswith('.pdf'):
+            # Read PDF using file path directly
             async with aiofiles.open(file_path, 'rb') as f:
-                reader = PyPDF2.PdfReader(await f.read())
-                text = "\n".join([page.extract_text() for page in reader.pages])
+                pdf_content = await f.read()
+                reader = PyPDF2.PdfReader(io.BytesIO(pdf_content))
+                text = "\n".join([page.extract_text() for page in reader.pages if page.extract_text()])
+                
         elif file_path.endswith('.docx'):
+            # Read DOCX using file path
             doc = Document(file_path)
-            text = "\n".join([para.text for para in doc.paragraphs])
+            text = "\n".join([para.text for para in doc.paragraphs if para.text])
         else:
             raise ValueError("Unsupported file format")
         
+        if not text.strip():
+            raise ValueError("No text content found in file")
+        
         return text.strip()
     
+    except PyPDF2.PdfReadError as e:
+        logger.error(f"PDF reading error: {str(e)}")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid PDF file format"
+        )
     except Exception as e:
         logger.error(f"Text extraction failed: {str(e)}")
         raise HTTPException(
             status_code=400,
-            detail="Failed to extract text from file"
+            detail="Failed to extract text from file. Please ensure the file is not password protected and contains readable text."
         )
 
 async def cleanup_file(file_path: str) -> None:

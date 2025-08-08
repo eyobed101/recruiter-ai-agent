@@ -17,7 +17,6 @@ class User(SQLModel, table=True):
     name: str
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
-    applications: List["Application"] = Relationship(back_populates="user")
 
 
 class CareerCategory(SQLModel, table=True):
@@ -53,7 +52,6 @@ class Application(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
     career_id: int = Field(foreign_key="careerpost.id")
-    user_id: Optional[str] = Field(default=None, foreign_key="user.id")
+    user_id: Optional[str] = Field(default=None)
 
     career: CareerPost = Relationship(back_populates="applications")
-    user: Optional[User] = Relationship(back_populates="applications")

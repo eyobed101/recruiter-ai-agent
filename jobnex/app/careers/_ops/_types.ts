@@ -1,4 +1,7 @@
+import { ReactNode } from "react";
+
 export interface CareerPost {
+  category_id: number;
   id: number;
   title: string;
   content: string;
@@ -13,6 +16,9 @@ export interface CareerCategory {
 }
 
 export interface Application {
+  career_id: number;
+  name: ReactNode;
+  location: ReactNode;
   id: number;
   fullName: string;
   phoneNumber: string;
