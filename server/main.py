@@ -6,13 +6,13 @@ from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
-from auth import get_current_user
 from models.model import *
-from ai import analyze_resume
-from tasks import send_status_email
+from llm.ai import analyze_resume
+from services.tasks import send_status_email
+from services.auth import get_current_user
 from sqlmodel import Session, create_engine, select
-from config import settings
-from utils import save_uploaded_file, extract_text_from_file
+from conf.config import settings
+from services.utils import save_uploaded_file, extract_text_from_file
 import os
 from typing import List, AsyncIterator
 from datetime import datetime

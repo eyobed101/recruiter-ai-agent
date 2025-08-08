@@ -2,6 +2,7 @@
 # Ignore the virtual environment directory
 /venv
 /server/serviceAccountKey.json
+/server/services/serviceAccountKey.json
 # /server/config.py
 /server/.env
 /server/uploads

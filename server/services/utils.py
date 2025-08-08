@@ -3,7 +3,7 @@ import magic
 import uuid
 from typing import Optional
 from fastapi import UploadFile, HTTPException
-from config import settings
+from conf.config import settings
 from pathlib import Path
 import logging
 import aiofiles
