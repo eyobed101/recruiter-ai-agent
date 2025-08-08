@@ -4,6 +4,7 @@
 /server/serviceAccountKey.json
 # /server/config.py
 /server/.env
+/server/uploads
 
 # server/serviceAccountKey.json --- IGNORE ---
 # server/venv --- IGNORE ---
